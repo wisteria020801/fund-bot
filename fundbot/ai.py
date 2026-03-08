@@ -34,7 +34,7 @@ def summarize_with_llm(payload: Dict) -> Optional[str]:
             data = r.json()
             return data["choices"][0]["message"]["content"].strip()
         if provider == "gemini":
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{os.getenv('LLM_MODEL','gemini-1.5-flash')}:generateContent?key={api_key}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{os.getenv('LLM_MODEL','gemini-2.5-flash')}:generateContent?key={api_key}"
             headers = {"Content-Type": "application/json"}
             body = {"contents": [{"parts": [{"text": text + "\n" + content}]}]}
             r = requests.post(url, headers=headers, json=body, timeout=30)
