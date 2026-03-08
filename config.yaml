@@ -1,0 +1,18 @@
+pool_name: "纳指/科技基金池"
+timezone: "Asia/Shanghai"
+us_tickers:
+  - "AAPL"
+  - "MSFT"
+  - "NVDA"
+  - "AMZN"
+  - "META"
+  - "GOOGL"
+  - "AVGO"
+  - "TSLA"
+  - "COST"
+  - "GOOG"
+funds:
+  - code: "006479"
+    name: "广发纳斯达克100ETF联接C"
+  - code: "003123"
+    name: "建信纳斯达克100指数C"
