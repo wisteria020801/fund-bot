@@ -48,6 +48,25 @@ def calc_returns(df: pd.DataFrame) -> Dict[str, Optional[float]]:
             out[k] = (latest - past) / past * 100.0 if past else None
     return out
 
+def calc_returns_asof(df: pd.DataFrame, asof: datetime.date) -> Dict[str, Optional[float]]:
+    if df is None or df.empty:
+        return {"r1": None, "r7": None, "r30": None, "r90": None}
+    df = df.sort_values("date")
+    df2 = df[df["date"] <= asof]
+    if df2.empty:
+        return {"r1": None, "r7": None, "r30": None, "r90": None}
+    latest_nav = df2.iloc[-1]["nav"]
+    latest_date = df2.iloc[-1]["date"]
+    out: Dict[str, Optional[float]] = {}
+    for k, window in [("r1", 1), ("r7", 7), ("r30", 30), ("r90", 90)]:
+        past_df = df2[df2["date"] <= latest_date - timedelta(days=window)]
+        if past_df.empty:
+            out[k] = None
+        else:
+            past = past_df.iloc[-1]["nav"]
+            out[k] = (latest_nav - past) / past * 100.0 if past else None
+    return out
+
 
 def max_drawdown(df: pd.DataFrame) -> Optional[float]:
     if df is None or df.empty:

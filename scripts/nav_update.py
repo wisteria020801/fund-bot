@@ -1,5 +1,6 @@
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timedelta
+import time
 from typing import Dict, List
 from fundbot.config import AppConfig
 from fundbot import db
@@ -21,7 +22,12 @@ def main() -> int:
         code = f.code.strip()
         if not code:
             continue
-        nav_df = fetch_fund_nav_series(code, 365)
+        nav_df = None
+        for _ in range(3):
+            nav_df = fetch_fund_nav_series(code, 365)
+            if nav_df is not None and not nav_df.empty:
+                break
+            time.sleep(2)
         rets = calc_returns(nav_df) if nav_df is not None else {"r1": None, "r7": None, "r30": None, "r90": None}
         mdd = max_drawdown(nav_df) if nav_df is not None else None
         fee, aum = fetch_fund_meta(code)
@@ -98,6 +104,57 @@ def main() -> int:
                 fallback_note = f"数据不足，沿用上一交易日评分（{last_date}）。"
         if (not ranked) and not fallback_note:
             fallback_note = "数据不足，今日不发布榜单。"
+        if (not ranked) and historical:
+            targets = []
+            d = datetime.utcnow().date()
+            for i in range(1, 8):
+                t = d - timedelta(days=i)
+                if t.weekday() < 5:
+                    targets.append(t)
+                if len(targets) >= 3:
+                    break
+            for t in targets:
+                pool2: List[Dict] = []
+                for f in cfg.funds:
+                    code = f.code.strip()
+                    df = fetch_fund_nav_series(code, 365)
+                    if df is None or df.empty:
+                        continue
+                    rets2 = fetch.calc_returns_asof(df, t)
+                    mdd2 = max_drawdown(df[df["date"] <= t])
+                    fee2, aum2 = f.fee_rate, f.aum
+                    if fee2 is None or aum2 is None:
+                        fee3, aum3 = fetch_fund_meta(code)
+                        fee2 = fee2 if fee2 is not None else fee3
+                        aum2 = aum2 if aum2 is not None else aum3
+                    data2 = {
+                        "code": code,
+                        "name": f.name or code,
+                        "latest_nav": None,
+                        "change_1d": rets2.get("r1"),
+                        "change_7d": rets2.get("r7"),
+                        "change_30d": rets2.get("r30"),
+                        "change_90d": rets2.get("r90"),
+                        "top_holdings": "[]",
+                        "max_drawdown": mdd2,
+                        "fee_rate": fee2,
+                        "aum": aum2,
+                    }
+                    pool2.append(data2)
+                ranked2 = score_pool(pool2) if pool2 else []
+                for x in ranked2:
+                    db.upsert_score(
+                        {
+                            "code": x["code"],
+                            "date": t.isoformat(),
+                            "total": x.get("score_total"),
+                            "rank30": x.get("score_rank30"),
+                            "rank90": x.get("score_rank90"),
+                            "penalty_drawdown": x.get("penalty_drawdown"),
+                            "score_aum": x.get("score_aum"),
+                            "penalty_fee": x.get("penalty_fee"),
+                        }
+                    )
     payload = {
         "scores": ranked,
         "top": top,
