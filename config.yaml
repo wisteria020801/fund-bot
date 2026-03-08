@@ -11,6 +11,7 @@ us_tickers:
   - "TSLA"
   - "COST"
   - "GOOG"
+  - "NQ=F"
 funds:
   - code: "006479"
     name: "广发纳斯达克100C"
