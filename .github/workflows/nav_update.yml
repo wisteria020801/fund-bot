@@ -1,7 +1,7 @@
 name: nav-update
 on:
   schedule:
-    - cron: "30 13 * * 1-5"
+    - cron: "0 15 * * 1-5"
   workflow_dispatch: {}
 jobs:
   run:
