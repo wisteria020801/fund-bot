@@ -7,11 +7,17 @@ import yaml
 from pydantic import BaseModel
 
 
+class Watch(BaseModel):
+    daily_change_alert: Optional[float] = None
+
+
 class Fund(BaseModel):
     code: str
     name: Optional[str] = None
     fee_rate: Optional[float] = None
     aum: Optional[float] = None
+    role: Optional[str] = None
+    watch: Optional[Watch] = None
 
 
 class AppConfig(BaseModel):
@@ -38,6 +44,7 @@ class AppConfig(BaseModel):
         if path.exists():
             with path.open("r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
+            # pydantic 模型会自动将内层 dict 转换为 Watch
             funds = [Fund(**x) for x in data.get("funds", [])]
             us_tickers = data.get("us_tickers", None)
             pool_name = data.get("pool_name", None)

@@ -13,6 +13,18 @@ us_tickers:
   - "GOOG"
 funds:
   - code: "006479"
-    name: "广发纳斯达克100ETF联接C"
+    name: "广发纳斯达克100C"
+    role: "Core_Growth"
   - code: "003123"
-    name: "建信纳斯达克100指数C"
+    name: "建信纳斯达克100C"
+    role: "Core_Growth"
+  - code: "005121"
+    name: "嘉实红利低波C"
+    role: "Defensive_Shield"
+    watch:
+      daily_change_alert: 0.015
+  - code: "000198"
+    name: "安信宝利债券C"
+    role: "Cash_Buffer"
+    watch:
+      daily_change_alert: 0.005

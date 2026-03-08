@@ -15,6 +15,7 @@ def main() -> int:
     cfg = AppConfig.load()
     today = datetime.utcnow().date().isoformat()
     pool: List[Dict] = []
+    alerts: List[str] = []
     for f in cfg.funds:
         code = f.code.strip()
         if not code:
@@ -30,6 +31,7 @@ def main() -> int:
         data = {
             "code": code,
             "name": f.name or code,
+            "role": f.role,
             "latest_nav": latest_nav,
             "change_1d": rets.get("r1"),
             "change_7d": rets.get("r7"),
@@ -43,6 +45,16 @@ def main() -> int:
         }
         db.upsert_fund(data)
         pool.append(data)
+        # watch: 日波动阈值告警（配置为小数，0.015=1.5%）
+        try:
+            threshold = f.watch.daily_change_alert if (f.watch and f.watch.daily_change_alert is not None) else None
+        except Exception:
+            threshold = None
+        chg1 = rets.get("r1")
+        if threshold is not None and chg1 is not None:
+            if abs(chg1) / 100.0 >= float(threshold):
+                role_tag = f"[{f.role}]" if f.role else ""
+                alerts.append(f"• {f.name or code}{role_tag} 日变动 {chg1:.2f}% ≥ 阈值 {threshold*100:.2f}%")
     ranked = score_pool(pool) if pool else []
     for x in ranked:
         db.upsert_score(
@@ -78,6 +90,9 @@ def main() -> int:
         lines.append("⚠️ 风险警示：")
         for x in bottom:
             lines.append(f"• {x.get('name', x['code'])} (综合分 {x['score_total']})")
+    if alerts:
+        lines.append("🚨 阈值告警：")
+        lines.extend(alerts)
     text = "\n".join(lines)
     send_telegram_message(text)
     db.log_message("nav_update", text)
