@@ -71,12 +71,23 @@ def main() -> int:
         )
     top = ranked[:3]
     bottom = ranked[-3:] if ranked else []
+    fallback_note = None
+    if not ranked or all(abs(z.get("score_total", 0.0)) < 1e-9 for z in ranked):
+        last_date = db.latest_scores_date()
+        if last_date and last_date != today:
+            prev = db.scores_by_date(last_date)
+            if prev:
+                ranked = prev
+                top = ranked[:3]
+                bottom = ranked[-3:]
+                fallback_note = f"数据不足，沿用上一交易日评分（{last_date}）。"
     payload = {
         "scores": ranked,
         "top": top,
         "bottom": bottom,
         "type": "nav_update",
         "ts": datetime.utcnow().isoformat(),
+        "note": fallback_note,
     }
     llm = summarize_with_llm(payload) or fallback_summary(payload)
     lines = []
@@ -93,6 +104,8 @@ def main() -> int:
     if alerts:
         lines.append("🚨 阈值告警：")
         lines.extend(alerts)
+    if fallback_note:
+        lines.append(f"ℹ️ {fallback_note}")
     text = "\n".join(lines)
     send_telegram_message(text)
     db.log_message("nav_update", text)

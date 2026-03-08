@@ -152,3 +152,30 @@ def log_message(run_type: str, content: str) -> None:
     )
     conn.commit()
     conn.close()
+
+
+def latest_scores_date() -> str | None:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("select date from scores order by date desc limit 1")
+    row = cur.fetchone()
+    conn.close()
+    return row["date"] if row else None
+
+
+def scores_by_date(date: str) -> list[dict]:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        select s.code, s.date, s.total, s.rank30, s.rank90, s.penalty_drawdown, s.score_aum, s.penalty_fee, f.name
+        from scores s
+        left join funds f on f.code = s.code
+        where s.date = ?
+        order by s.total desc
+        """,
+        (date,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
