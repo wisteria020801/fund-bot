@@ -16,6 +16,7 @@ def main() -> int:
     today = datetime.utcnow().date().isoformat()
     pool: List[Dict] = []
     alerts: List[str] = []
+    historical = db.all_funds_snapshot()
     for f in cfg.funds:
         code = f.code.strip()
         if not code:
@@ -28,6 +29,20 @@ def main() -> int:
         latest_nav = None
         if nav_df is not None and not nav_df.empty:
             latest_nav = float(nav_df.iloc[-1]["nav"])
+        if (rets.get("r30") is None or rets.get("r90") is None) and historical.get(code):
+            snap = historical[code]
+            rets = {
+                "r1": rets.get("r1") if rets.get("r1") is not None else snap.get("change_1d"),
+                "r7": rets.get("r7") if rets.get("r7") is not None else snap.get("change_7d"),
+                "r30": rets.get("r30") if rets.get("r30") is not None else snap.get("change_30d"),
+                "r90": rets.get("r90") if rets.get("r90") is not None else None,
+            }
+            if mdd is None:
+                mdd = snap.get("max_drawdown")
+            if fee is None:
+                fee = snap.get("fee_rate")
+            if aum is None:
+                aum = snap.get("aum")
         data = {
             "code": code,
             "name": f.name or code,
@@ -81,6 +96,8 @@ def main() -> int:
                 top = ranked[:3]
                 bottom = ranked[-3:]
                 fallback_note = f"数据不足，沿用上一交易日评分（{last_date}）。"
+        if (not ranked) and not fallback_note:
+            fallback_note = "数据不足，今日不发布榜单。"
     payload = {
         "scores": ranked,
         "top": top,

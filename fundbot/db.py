@@ -179,3 +179,20 @@ def scores_by_date(date: str) -> list[dict]:
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+def all_funds_snapshot() -> dict[str, dict]:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        select code, name, latest_nav, change_1d, change_7d, change_30d, max_drawdown, fee_rate, aum, updated_at
+        from funds
+        """
+    )
+    rows = cur.fetchall()
+    conn.close()
+    out: dict[str, dict] = {}
+    for r in rows:
+        out[r["code"]] = dict(r)
+    return out
