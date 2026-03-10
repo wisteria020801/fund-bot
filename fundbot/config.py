@@ -20,6 +20,8 @@ class DCAThresholds(BaseModel):
 class DCAConfig(BaseModel):
     base_amount: float = 10.0
     thresholds: DCAThresholds = DCAThresholds()
+    macro_brake_threshold: float = 4.5
+    macro_brake_factor: float = 0.8
 
 
 class Fund(BaseModel):

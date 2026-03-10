@@ -18,6 +18,8 @@ dca:
     crash: -2.0
     crash_hard: -4.0
     bubble: 3.0
+  macro_brake_threshold: 4.5
+  macro_brake_factor: 0.8
 funds:
   - code: "006479"
     name: "广发纳斯达克100C"

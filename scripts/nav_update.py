@@ -19,6 +19,7 @@ from fundbot.notify import send_telegram_message
 from fundbot.ai import summarize_with_llm, fallback_summary
 from fundbot.config import to_json
 import yfinance as yf
+from fundbot.fetch import fred_dgs10_latest
 
 
 def main() -> int:
@@ -195,11 +196,18 @@ def main() -> int:
             dca_mult = 1.5
         elif avg_score >= 30:
             dca_mult = 0.5
+    macro_note = None
+    dgs10 = fred_dgs10_latest()
+    if dgs10 is not None and dgs10 > cfg.dca.macro_brake_threshold:
+        dca_mult = max(0.5, round(dca_mult * cfg.dca.macro_brake_factor, 2))
+        macro_note = f"10Y={dgs10:.2f}%>阈值{cfg.dca.macro_brake_threshold:.2f}%，乘数乘以{cfg.dca.macro_brake_factor}"
     dca_amount = round(cfg.dca.base_amount * dca_mult, 2)
     lines = []
     lines.append("📊 【Wisteria Fund Bot - 净值复盘】")
     lines.append(f"🤖 AI 核心判断：{llm}")
     lines.append(f"💰 定投乘数：{dca_mult:.1f} ×（建议 {dca_amount:.2f} 元）")
+    if macro_note:
+        lines.append(f"🛑 宏观刹车：{macro_note}")
     # 加仓确认：RSI<30 且连跌3天
     suggest_lump = False
     if dca_mult >= 2.0 and top:
