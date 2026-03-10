@@ -12,6 +12,12 @@ us_tickers:
   - "COST"
   - "GOOG"
   - "NQ=F"
+dca:
+  base_amount: 10
+  thresholds:
+    crash: -2.0
+    crash_hard: -4.0
+    bubble: 3.0
 funds:
   - code: "006479"
     name: "广发纳斯达克100C"

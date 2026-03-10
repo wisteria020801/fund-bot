@@ -9,6 +9,7 @@ from fundbot.quant import score_pool
 from fundbot.notify import send_telegram_message
 from fundbot.ai import summarize_with_llm, fallback_summary
 from fundbot.config import to_json
+import yfinance as yf
 
 
 def main() -> int:
@@ -164,9 +165,37 @@ def main() -> int:
         "note": fallback_note,
     }
     llm = summarize_with_llm(payload) or fallback_summary(payload)
+    dca_mult = 1.0
+    try:
+        hist = yf.Ticker("NQ=F").history(period="2d")
+        if len(hist) >= 2:
+            prev_close = float(hist["Close"].iloc[-2])
+            curr_close = float(hist["Close"].iloc[-1])
+            if prev_close:
+                pct = (curr_close - prev_close) / prev_close * 100.0
+                th = cfg.dca.thresholds
+                if pct <= th.crash_hard:
+                    dca_mult = 2.0
+                elif pct <= th.crash:
+                    dca_mult = 1.5
+                elif pct >= th.bubble:
+                    dca_mult = 0.5
+    except Exception:
+        pass
+    if dca_mult == 1.0 and top:
+        avg_score = sum(x.get("score_total", 0.0) for x in top) / max(1, len(top))
+        if avg_score <= -10:
+            dca_mult = 1.5
+        elif avg_score >= 30:
+            dca_mult = 0.5
+    dca_amount = round(cfg.dca.base_amount * dca_mult, 2)
     lines = []
     lines.append("📊 【Wisteria Fund Bot - 净值复盘】")
     lines.append(f"🤖 AI 核心判断：{llm}")
+    lines.append(f"💰 定投乘数：{dca_mult:.1f} ×（建议 {dca_amount:.2f} 元）")
+    if dca_mult >= 2.0 and top:
+        cand = ", ".join([x.get('name', x['code']) for x in top[:2]])
+        lines.append(f"🧭 一次性加仓候选：{cand}")
     if top:
         lines.append("🏆 今日高分标的：")
         for x in top:

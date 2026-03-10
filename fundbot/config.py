@@ -11,6 +11,17 @@ class Watch(BaseModel):
     daily_change_alert: Optional[float] = None
 
 
+class DCAThresholds(BaseModel):
+    crash: float = -2.0
+    crash_hard: float = -4.0
+    bubble: float = 3.0
+
+
+class DCAConfig(BaseModel):
+    base_amount: float = 10.0
+    thresholds: DCAThresholds = DCAThresholds()
+
+
 class Fund(BaseModel):
     code: str
     name: Optional[str] = None
@@ -36,6 +47,7 @@ class AppConfig(BaseModel):
     ]
     pool_name: str = "纳指/科技基金池"
     timezone: str = "Asia/Shanghai"
+    dca: DCAConfig = DCAConfig()
 
     @staticmethod
     def load(path: Optional[Path] = None) -> "AppConfig":
@@ -44,16 +56,17 @@ class AppConfig(BaseModel):
         if path.exists():
             with path.open("r", encoding="utf-8") as f:
                 data = yaml.safe_load(f) or {}
-            # pydantic 模型会自动将内层 dict 转换为 Watch
             funds = [Fund(**x) for x in data.get("funds", [])]
             us_tickers = data.get("us_tickers", None)
             pool_name = data.get("pool_name", None)
             timezone = data.get("timezone", None)
+            dca_dict = data.get("dca", None)
             return AppConfig(
                 funds=funds,
                 us_tickers=us_tickers if us_tickers else AppConfig().us_tickers,
                 pool_name=pool_name if pool_name else AppConfig().pool_name,
                 timezone=timezone if timezone else AppConfig().timezone,
+                dca=DCAConfig(**dca_dict) if isinstance(dca_dict, dict) else AppConfig().dca,
             )
         return AppConfig()
 
