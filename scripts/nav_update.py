@@ -4,7 +4,16 @@ import time
 from typing import Dict, List
 from fundbot.config import AppConfig
 from fundbot import db
-from fundbot.fetch import fetch_fund_nav_series, calc_returns, max_drawdown, fetch_fund_meta, fetch_top_holdings_codes
+from fundbot.fetch import (
+    fetch_fund_nav_series,
+    calc_returns,
+    max_drawdown,
+    fetch_fund_meta,
+    fetch_top_holdings_codes,
+    ndx_ma_bias,
+    yf_pct_change,
+    rsi,
+)
 from fundbot.quant import score_pool
 from fundbot.notify import send_telegram_message
 from fundbot.ai import summarize_with_llm, fallback_summary
@@ -166,22 +175,20 @@ def main() -> int:
     }
     llm = summarize_with_llm(payload) or fallback_summary(payload)
     dca_mult = 1.0
-    try:
-        hist = yf.Ticker("NQ=F").history(period="2d")
-        if len(hist) >= 2:
-            prev_close = float(hist["Close"].iloc[-2])
-            curr_close = float(hist["Close"].iloc[-1])
-            if prev_close:
-                pct = (curr_close - prev_close) / prev_close * 100.0
-                th = cfg.dca.thresholds
-                if pct <= th.crash_hard:
-                    dca_mult = 2.0
-                elif pct <= th.crash:
-                    dca_mult = 1.5
-                elif pct >= th.bubble:
-                    dca_mult = 0.5
-    except Exception:
-        pass
+    pct = yf_pct_change("NQ=F") or yf_pct_change("^NDX") or 0.0
+    th = cfg.dca.thresholds
+    if pct <= th.crash_hard:
+        dca_mult = 2.0
+    elif pct <= th.crash:
+        dca_mult = 1.5
+    elif pct >= th.bubble:
+        dca_mult = 0.5
+    bias = ndx_ma_bias(250)
+    if bias is not None:
+        if bias < -5.0:
+            dca_mult = min(2.0, dca_mult * 1.25)
+        elif bias > 5.0:
+            dca_mult = max(0.5, min(dca_mult, 1.0))
     if dca_mult == 1.0 and top:
         avg_score = sum(x.get("score_total", 0.0) for x in top) / max(1, len(top))
         if avg_score <= -10:
@@ -193,9 +200,26 @@ def main() -> int:
     lines.append("📊 【Wisteria Fund Bot - 净值复盘】")
     lines.append(f"🤖 AI 核心判断：{llm}")
     lines.append(f"💰 定投乘数：{dca_mult:.1f} ×（建议 {dca_amount:.2f} 元）")
+    # 加仓确认：RSI<30 且连跌3天
+    suggest_lump = False
     if dca_mult >= 2.0 and top:
+        try:
+            top_code = top[0].get("code")
+            nav_df = fetch_fund_nav_series(top_code, 60)
+            if nav_df is not None and not nav_df.empty and len(nav_df) >= 20:
+                closes = nav_df["nav"].astype(float).tolist()
+                rsi14 = rsi(closes, period=14)
+                downs = 0
+                for i in range(1, 4):
+                    if closes[-i] < closes[-i - 1]:
+                        downs += 1
+                if (rsi14 is not None and rsi14 < 30) and downs >= 3:
+                    suggest_lump = True
+        except Exception:
+            suggest_lump = False
+    if suggest_lump:
         cand = ", ".join([x.get('name', x['code']) for x in top[:2]])
-        lines.append(f"🧭 一次性加仓候选：{cand}")
+        lines.append(f"🧭 一次性加仓候选（冷静期满足）：{cand}（RSI<30 & 三连跌）")
     if top:
         lines.append("🏆 今日高分标的：")
         for x in top:
