@@ -1,4 +1,9 @@
 akshare>=1.13.80
+pandas>=2.0
+yfinance>=0.2.36
+matplotlib>=3.8
+seaborn>=0.13
+requests>=2.31
 yfinance>=0.2.37
 python-telegram-bot>=21.6
 pandas>=2.0.0

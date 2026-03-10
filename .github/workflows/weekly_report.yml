@@ -1,0 +1,64 @@
+name: weekly-report
+on:
+  schedule:
+    - cron: "5 15 * * 0"
+  workflow_dispatch: {}
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Prepare DB from data branch
+        run: |
+          set -e
+          git fetch origin data || true
+          if git rev-parse --verify origin/data >/dev/null 2>&1; then
+            mkdir -p /tmp/data-wt
+            git worktree add /tmp/data-wt data
+            cp /tmp/data-wt/fund_data.db ./fund_data.db
+          else
+            echo "No data branch found, skip."
+            exit 0
+          fi
+      - name: Build heatmap
+        run: |
+          python scripts/weekly_report.py
+      - name: Push heatmap to data branch
+        env:
+          GIT_AUTHOR_NAME: actions-bot
+          GIT_AUTHOR_EMAIL: actions@github.com
+          GIT_COMMITTER_NAME: actions-bot
+          GIT_COMMITTER_EMAIL: actions@github.com
+          REPO_AUTH: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
+        run: |
+          if [ -f dca_heatmap.png ]; then
+            git config user.name "${GIT_AUTHOR_NAME}"
+            git config user.email "${GIT_AUTHOR_EMAIL}"
+            mkdir -p /tmp/data-push
+            cp dca_heatmap.png /tmp/data-push/dca_heatmap.png
+            cd /tmp/data-push
+            git init
+            git config user.name "${GIT_AUTHOR_NAME}"
+            git config user.email "${GIT_AUTHOR_EMAIL}"
+            git checkout -b data
+            git add dca_heatmap.png
+            git commit -m "weekly heatmap: $(date -u +%Y-%m-%d)"
+            git remote add origin "${REPO_AUTH}"
+            git push -f origin data
+          else
+            echo "No heatmap generated, skip."
+          fi
