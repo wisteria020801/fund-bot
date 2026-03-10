@@ -244,6 +244,31 @@ def main() -> int:
     text = "\n".join(lines)
     send_telegram_message(text)
     db.log_message("nav_update", text)
+    rsi14_logged = None
+    try:
+        if suggest_lump and 'rsi14' in locals():
+            rsi14_logged = rsi14
+    except Exception:
+        rsi14_logged = None
+    try:
+        db.upsert_dca_log(
+            {
+                "date": today,
+                "bias": bias,
+                "dgs10": dgs10,
+                "rsi14": rsi14_logged,
+                "dca_mult": dca_mult,
+                "dca_amount": dca_amount,
+                "pct": pct,
+                "avg_score": sum(x.get("score_total", 0.0) for x in top) / max(1, len(top)) if top else None,
+                "suggest_lump": 1 if suggest_lump else 0,
+                "note": fallback_note,
+                "ts": datetime.utcnow().isoformat(),
+            }
+        )
+        db.export_dca_csv("dca_history_snapshot.csv")
+    except Exception:
+        pass
     return 0
 
 

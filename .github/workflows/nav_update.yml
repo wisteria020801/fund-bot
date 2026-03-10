@@ -48,15 +48,19 @@ jobs:
           REPO_AUTH: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git
         run: |
           DBPATH="${{ github.workspace }}/fund_data.db"
+          CSVPATH="${{ github.workspace }}/dca_history_snapshot.csv"
           if [ -f "$DBPATH" ]; then
             mkdir -p /tmp/data-push
             cp "$DBPATH" /tmp/data-push/fund_data.db
+            if [ -f "$CSVPATH" ]; then
+              cp "$CSVPATH" /tmp/data-push/dca_history_snapshot.csv
+            fi
             cd /tmp/data-push
             git init
             git config user.name "${GIT_AUTHOR_NAME}"
             git config user.email "${GIT_AUTHOR_EMAIL}"
             git checkout -b data
-            git add fund_data.db
+            git add .
             git commit -m "data: update $(date -u +%Y-%m-%dT%H:%M:%SZ)"
             git remote add origin "${REPO_AUTH}"
             git push -f origin data

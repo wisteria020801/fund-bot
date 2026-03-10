@@ -69,6 +69,23 @@ def init_db() -> None:
         )
         """
     )
+    cur.execute(
+        """
+        create table if not exists dca_logs(
+            date text primary key,
+            bias real,
+            dgs10 real,
+            rsi14 real,
+            dca_mult real,
+            dca_amount real,
+            pct real,
+            avg_score real,
+            suggest_lump integer,
+            note text,
+            ts text
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -196,3 +213,37 @@ def all_funds_snapshot() -> dict[str, dict]:
     for r in rows:
         out[r["code"]] = dict(r)
     return out
+
+
+def upsert_dca_log(row: Dict[str, Any]) -> None:
+    conn = connect()
+    cur = conn.cursor()
+    cols = ["date", "bias", "dgs10", "rsi14", "dca_mult", "dca_amount", "pct", "avg_score", "suggest_lump", "note", "ts"]
+    placeholders = ",".join(["?"] * len(cols))
+    update_cols = ",".join([f"{c}=excluded.{c}" for c in cols[1:]])
+    sql = f"""
+        insert into dca_logs({",".join(cols)})
+        values({placeholders})
+        on conflict(date) do update set {update_cols}
+    """
+    values = [row.get(c) for c in cols]
+    cur.execute(sql, values)
+    conn.commit()
+    conn.close()
+
+
+def export_dca_csv(path: str) -> None:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        "select date,bias,dgs10,rsi14,dca_mult,dca_amount,pct,avg_score,suggest_lump,note,ts from dca_logs order by date"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    import csv
+
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["date", "bias", "dgs10", "rsi14", "dca_mult", "dca_amount", "pct", "avg_score", "suggest_lump", "note", "ts"])
+        for r in rows:
+            w.writerow([r["date"], r["bias"], r["dgs10"], r["rsi14"], r["dca_mult"], r["dca_amount"], r["pct"], r["avg_score"], r["suggest_lump"], r["note"], r["ts"]])
