@@ -17,3 +17,41 @@ def send_telegram_message(text: str) -> Optional[str]:
         return "ok"
     except Exception:
         return None
+
+
+def send_telegram_photo(photo_path: str, caption: Optional[str] = None) -> Optional[str]:
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id or not os.path.exists(photo_path):
+        return None
+    url = f"https://api.telegram.org/bot{token}/sendPhoto"
+    files = {"photo": open(photo_path, "rb")}
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+        data["parse_mode"] = "HTML"
+    try:
+        r = requests.post(url, data=data, files=files, timeout=30)
+        r.raise_for_status()
+        return "ok"
+    except Exception:
+        return None
+
+
+def send_telegram_document(file_path: str, caption: Optional[str] = None) -> Optional[str]:
+    token = os.getenv("TELEGRAM_TOKEN", "")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+    if not token or not chat_id or not os.path.exists(file_path):
+        return None
+    url = f"https://api.telegram.org/bot{token}/sendDocument"
+    files = {"document": open(file_path, "rb")}
+    data = {"chat_id": chat_id}
+    if caption:
+        data["caption"] = caption
+        data["parse_mode"] = "HTML"
+    try:
+        r = requests.post(url, data=data, files=files, timeout=30)
+        r.raise_for_status()
+        return "ok"
+    except Exception:
+        return None

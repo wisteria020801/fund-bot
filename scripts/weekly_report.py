@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from fundbot.notify import send_telegram_message, send_telegram_photo, send_telegram_document
 
 
 def load_logs(db_path: str) -> pd.DataFrame:
@@ -89,7 +90,33 @@ def main() -> int:
     out_path = os.getenv("HEATMAP_PATH", "dca_heatmap.png")
     df = load_logs(db_path)
     build_heatmap(df, out_path)
-    weekly_pnl(df, db_path, os.getenv("PNL_CSV_PATH", "weekly_pnl.csv"))
+    pnl_csv = os.getenv("PNL_CSV_PATH", "weekly_pnl.csv")
+    weekly_pnl(df, db_path, pnl_csv)
+    if os.path.exists(pnl_csv):
+        try:
+            pnl_df = pd.read_csv(pnl_csv)
+            if not pnl_df.empty:
+                r = pnl_df.iloc[0]
+                text = (
+                    f"📅 【Wisteria Fund Bot - 周复盘】\n"
+                    f"周期：{r['week_start']} ~ {r['week_end']}\n"
+                    f"投入合计：{r['invest_sum']:.2f} 元\n"
+                    f"估算浮盈：{r['est_pnl']:.2f} 元（均值7日涨跌 {r['avg_change_7d_percent']:.2f}%）\n"
+                    f"估算总资产：{r['est_value']:.2f} 元"
+                )
+                send_telegram_message(text)
+        except Exception:
+            pass
+    if os.path.exists(out_path):
+        try:
+            send_telegram_photo(out_path, caption="DCA乘数日历热力图")
+        except Exception:
+            pass
+    if os.path.exists(pnl_csv):
+        try:
+            send_telegram_document(pnl_csv, caption="周盈亏回溯CSV")
+        except Exception:
+            pass
     return 0
 
 

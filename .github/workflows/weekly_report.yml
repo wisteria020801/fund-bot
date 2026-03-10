@@ -35,6 +35,9 @@ jobs:
             exit 0
           fi
       - name: Build heatmap
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python scripts/weekly_report.py
       - name: Push heatmap to data branch
