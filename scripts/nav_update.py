@@ -175,19 +175,32 @@ def main() -> int:
         "note": fallback_note,
     }
     llm = summarize_with_llm(payload) or fallback_summary(payload)
-    dca_mult = 1.0
+    # 决策路径拆解
     pct = yf_pct_change("NQ=F") or yf_pct_change("^NDX") or 0.0
     th = cfg.dca.thresholds
+    # 基础乘数
     if pct <= th.crash_hard:
-        dca_mult = 2.0
+        base_mult = 2.0
     elif pct <= th.crash:
-        dca_mult = 1.5
+        base_mult = 1.5
     elif pct >= th.bubble:
-        dca_mult = 0.5
+        base_mult = 0.5
+    else:
+        base_mult = 1.0
+    # 位置修正
     bias = ndx_ma_bias(250)
+    if bias is None:
+        pos_mult = 1.0
+    elif bias < -5.0:
+        pos_mult = 1.25
+    elif bias > 5.0:
+        pos_mult = min(1.0, 1.0)  # 明确限制到不高于1.0
+    else:
+        pos_mult = 1.0
+    dca_mult = base_mult
     if bias is not None:
         if bias < -5.0:
-            dca_mult = min(2.0, dca_mult * 1.25)
+            dca_mult = min(2.0, dca_mult * pos_mult)
         elif bias > 5.0:
             dca_mult = max(0.5, min(dca_mult, 1.0))
     if dca_mult == 1.0 and top:
@@ -196,16 +209,48 @@ def main() -> int:
             dca_mult = 1.5
         elif avg_score >= 30:
             dca_mult = 0.5
-    macro_note = None
+    # 宏观刹车
     dgs10 = fred_dgs10_latest()
     if dgs10 is not None and dgs10 > cfg.dca.macro_brake_threshold:
-        dca_mult = max(0.5, round(dca_mult * cfg.dca.macro_brake_factor, 2))
-        macro_note = f"10Y={dgs10:.2f}%>阈值{cfg.dca.macro_brake_threshold:.2f}%，乘数乘以{cfg.dca.macro_brake_factor}"
+        macro_mult = cfg.dca.macro_brake_factor
+        dca_mult = max(0.5, round(dca_mult * macro_mult, 2))
+        macro_note = f"10Y={dgs10:.2f}%>阈值{cfg.dca.macro_brake_threshold:.2f}%，乘数×{cfg.dca.macro_brake_factor}"
+    else:
+        macro_mult = 1.0
     dca_amount = round(cfg.dca.base_amount * dca_mult, 2)
+    # 选拔理由（简单启发式）
+    reasons = {}
+    if ranked:
+        fees = [z.get("fee_rate") for z in ranked if z.get("fee_rate") is not None]
+        fee_med = sorted(fees)[len(fees)//2] if fees else None
+        mdds = [z.get("max_drawdown") for z in ranked if z.get("max_drawdown") is not None]
+        mdd_med = sorted(mdds)[len(mdds)//2] if mdds else None
+        for z in top:
+            rs = []
+            if fee_med is not None and z.get("fee_rate") is not None and z["fee_rate"] <= fee_med:
+                rs.append("费率较低")
+            if mdd_med is not None and z.get("max_drawdown") is not None and z["max_drawdown"] <= mdd_med:
+                rs.append("回撤控制较好")
+            if z.get("change_30d") and z.get("change_30d") > 0:
+                rs.append("近30日表现偏强")
+            if not rs and z.get("change_90d") and z["change_90d"] > 0:
+                rs.append("近90日回升")
+            reasons[z["code"]] = "；".join(rs[:2]) if rs else "综合因子均衡"
+    # 决策看板消息
     lines = []
-    lines.append("📊 【Wisteria Fund Bot - 净值复盘】")
-    lines.append(f"🤖 AI 核心判断：{llm}")
-    lines.append(f"💰 定投乘数：{dca_mult:.1f} ×（建议 {dca_amount:.2f} 元）")
+    lines.append("📊 【Wisteria Fund Bot - 决策看板】")
+    lines.append("1. 市场环境监控")
+    pct_str = f"{pct:.2f}%" if pct is not None else "—"
+    bias_str = f"{bias:.2f}%" if bias is not None else "—"
+    dgs10_str = f"{dgs10:.2f}%" if dgs10 is not None else "—"
+    lines.append(f"• 纳指期货 NQ=F：{pct_str}")
+    lines.append(f"• 年线乖离率 Bias：{bias_str}")
+    lines.append(f"• 10年期美债 DGS10：{dgs10_str}")
+    lines.append("2. 决策计算路径")
+    lines.append(f"• 基础乘数：{base_mult:.2f}x（源于日变动）")
+    lines.append(f"• 位置修正：×{pos_mult:.2f}（源于 Bias）")
+    lines.append(f"• 宏观修正：×{macro_mult:.2f}（源于 DGS10）")
+    lines.append(f"3. 最终指令：{dca_mult:.2f}x → 建议 {dca_amount:.2f} 元")
     if macro_note:
         lines.append(f"🛑 宏观刹车：{macro_note}")
     # 加仓确认：RSI<30 且连跌3天
@@ -229,9 +274,11 @@ def main() -> int:
         cand = ", ".join([x.get('name', x['code']) for x in top[:2]])
         lines.append(f"🧭 一次性加仓候选（冷静期满足）：{cand}（RSI<30 & 三连跌）")
     if top:
-        lines.append("🏆 今日高分标的：")
+        lines.append("4. 标的选拔")
         for x in top:
-            lines.append(f"• {x.get('name', x['code'])} (综合分 {x['score_total']})")
+            r = reasons.get(x["code"]) if reasons else None
+            reason = f"— 理由：{r}" if r else ""
+            lines.append(f"• {x.get('name', x['code'])}（综合分 {x['score_total']}）{reason}")
     if bottom:
         lines.append("⚠️ 风险警示：")
         for x in bottom:
