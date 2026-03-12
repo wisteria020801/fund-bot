@@ -166,10 +166,17 @@ def main() -> int:
                             "penalty_fee": x.get("penalty_fee"),
                         }
                     )
+    # 过滤掉全为 0 分的标的以避免“0.0 噪音”
+    visible_ranked = [z for z in ranked if abs(z.get("score_total", 0.0)) > 1e-9]
+    top_visible = visible_ranked[:3]
+    bottom_visible = visible_ranked[-3:] if visible_ranked else []
+    # 后续展示与统计尽量使用可见集合；若为空则保留原集合用于兜底逻辑
+    top_for_msg = top_visible if top_visible else top
+    bottom_for_msg = bottom_visible if bottom_visible else bottom
     payload = {
         "scores": ranked,
-        "top": top,
-        "bottom": bottom,
+        "top": top_for_msg,
+        "bottom": bottom_for_msg,
         "type": "nav_update",
         "ts": datetime.utcnow().isoformat(),
         "note": fallback_note,
@@ -203,8 +210,8 @@ def main() -> int:
             dca_mult = min(2.0, dca_mult * pos_mult)
         elif bias > 5.0:
             dca_mult = max(0.5, min(dca_mult, 1.0))
-    if dca_mult == 1.0 and top:
-        avg_score = sum(x.get("score_total", 0.0) for x in top) / max(1, len(top))
+    if dca_mult == 1.0 and top_for_msg:
+        avg_score = sum(x.get("score_total", 0.0) for x in top_for_msg) / max(1, len(top_for_msg))
         if avg_score <= -10:
             dca_mult = 1.5
         elif avg_score >= 30:
@@ -220,12 +227,12 @@ def main() -> int:
     dca_amount = round(cfg.dca.base_amount * dca_mult, 2)
     # 选拔理由（简单启发式）
     reasons = {}
-    if ranked:
+    if top_for_msg:
         fees = [z.get("fee_rate") for z in ranked if z.get("fee_rate") is not None]
         fee_med = sorted(fees)[len(fees)//2] if fees else None
         mdds = [z.get("max_drawdown") for z in ranked if z.get("max_drawdown") is not None]
         mdd_med = sorted(mdds)[len(mdds)//2] if mdds else None
-        for z in top:
+        for z in top_for_msg:
             rs = []
             if fee_med is not None and z.get("fee_rate") is not None and z["fee_rate"] <= fee_med:
                 rs.append("费率较低")
@@ -255,9 +262,9 @@ def main() -> int:
         lines.append(f"🛑 宏观刹车：{macro_note}")
     # 加仓确认：RSI<30 且连跌3天
     suggest_lump = False
-    if dca_mult >= 2.0 and top:
+    if dca_mult >= 2.0 and top_for_msg:
         try:
-            top_code = top[0].get("code")
+            top_code = top_for_msg[0].get("code")
             nav_df = fetch_fund_nav_series(top_code, 60)
             if nav_df is not None and not nav_df.empty and len(nav_df) >= 20:
                 closes = nav_df["nav"].astype(float).tolist()
@@ -271,17 +278,17 @@ def main() -> int:
         except Exception:
             suggest_lump = False
     if suggest_lump:
-        cand = ", ".join([x.get('name', x['code']) for x in top[:2]])
+        cand = ", ".join([x.get('name', x['code']) for x in top_for_msg[:2]])
         lines.append(f"🧭 一次性加仓候选（冷静期满足）：{cand}（RSI<30 & 三连跌）")
-    if top:
+    if top_for_msg:
         lines.append("4. 标的选拔")
-        for x in top:
+        for x in top_for_msg:
             r = reasons.get(x["code"]) if reasons else None
             reason = f"— 理由：{r}" if r else ""
             lines.append(f"• {x.get('name', x['code'])}（综合分 {x['score_total']}）{reason}")
-    if bottom:
+    if bottom_for_msg:
         lines.append("⚠️ 风险警示：")
-        for x in bottom:
+        for x in bottom_for_msg:
             lines.append(f"• {x.get('name', x['code'])} (综合分 {x['score_total']})")
     if alerts:
         lines.append("🚨 阈值告警：")
