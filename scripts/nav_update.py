@@ -7,6 +7,7 @@ from fundbot import db
 from fundbot.fetch import (
     fetch_fund_nav_series,
     calc_returns,
+    calc_returns_asof,
     max_drawdown,
     fetch_fund_meta,
     fetch_top_holdings_codes,
@@ -131,7 +132,7 @@ def main() -> int:
                     df = fetch_fund_nav_series(code, 365)
                     if df is None or df.empty:
                         continue
-                    rets2 = fetch.calc_returns_asof(df, t)
+                    rets2 = calc_returns_asof(df, t)
                     mdd2 = max_drawdown(df[df["date"] <= t])
                     fee2, aum2 = f.fee_rate, f.aum
                     if fee2 is None or aum2 is None:
@@ -217,6 +218,7 @@ def main() -> int:
         elif avg_score >= 30:
             dca_mult = 0.5
     # 宏观刹车
+    macro_note = None
     dgs10 = fred_dgs10_latest()
     if dgs10 is not None and dgs10 > cfg.dca.macro_brake_threshold:
         macro_mult = cfg.dca.macro_brake_factor
