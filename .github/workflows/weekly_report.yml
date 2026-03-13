@@ -29,7 +29,12 @@ jobs:
           if git rev-parse --verify origin/data >/dev/null 2>&1; then
             mkdir -p /tmp/data-wt
             git worktree add /tmp/data-wt data
-            cp /tmp/data-wt/fund_data.db ./fund_data.db
+            if [ -f /tmp/data-wt/fund_data.db ]; then
+              cp /tmp/data-wt/fund_data.db ./fund_data.db
+            else
+              echo "fund_data.db not found in data branch, skip weekly report."
+              exit 0
+            fi
           else
             echo "No data branch found, skip."
             exit 0
@@ -52,6 +57,7 @@ jobs:
             git config user.name "${GIT_AUTHOR_NAME}"
             git config user.email "${GIT_AUTHOR_EMAIL}"
             mkdir -p /tmp/data-push
+            if [ -f fund_data.db ]; then cp fund_data.db /tmp/data-push/fund_data.db; fi
             if [ -f dca_heatmap.png ]; then cp dca_heatmap.png /tmp/data-push/dca_heatmap.png; fi
             if [ -f weekly_pnl.csv ]; then cp weekly_pnl.csv /tmp/data-push/weekly_pnl.csv; fi
             cd /tmp/data-push

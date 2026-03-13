@@ -39,6 +39,9 @@ def fetch_fund_nav_series(code: str, days: int = 365) -> Optional[pd.DataFrame]:
             return None
         df = df.rename(columns={"净值日期": "date", "单位净值": "nav"})
         df["date"] = pd.to_datetime(df["date"]).dt.date
+        df["nav"] = pd.to_numeric(df["nav"], errors="coerce")
+        df = df.dropna(subset=["nav"])
+        df = df[df["nav"] > 0]
         df = df[df["date"] >= start]
         df = df.sort_values("date")
         return df[["date", "nav"]]
