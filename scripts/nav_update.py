@@ -302,6 +302,7 @@ def main() -> int:
         lines.append("📊 【Wisteria Fund Bot - 收盘提醒（15:15）】")
     else:
         lines.append("📊 【Wisteria Fund Bot - 数据同步报告（23:59）】")
+    lines.append(f"🤖 AI 核心判断：{llm}")
     lines.append("数据来源：实时=AKShare；缓存=本地DB最近有效交易日 (Cache)")
     lines.append("1. 市场环境监控")
     pct_str = f"{pct_raw:.2f}%" if pct_raw is not None else "—"
