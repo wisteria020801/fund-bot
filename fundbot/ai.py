@@ -1,7 +1,7 @@
 from __future__ import annotations
 import json
 import os
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import requests
 
 

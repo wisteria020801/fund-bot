@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import time
 from typing import Dict, List
+import os
 from fundbot.config import AppConfig
 from fundbot import db
 from fundbot.fetch import (
@@ -13,10 +14,11 @@ from fundbot.fetch import (
     fetch_top_holdings_codes,
     ndx_ma_bias,
     yf_pct_change,
+    yf_live_pct_change,
     rsi,
 )
 from fundbot.quant import score_pool
-from fundbot.notify import send_telegram_message
+from fundbot.notify import send_telegram_message, format_score_total
 from fundbot.ai import summarize_with_llm, fallback_summary
 from fundbot.config import to_json
 import yfinance as yf
@@ -30,6 +32,7 @@ def main() -> int:
     pool: List[Dict] = []
     alerts: List[str] = []
     historical = db.all_funds_snapshot()
+    cache_used: Dict[str, bool] = {}
     for f in cfg.funds:
         code = f.code.strip()
         if not code:
@@ -46,7 +49,10 @@ def main() -> int:
         holdings = fetch_top_holdings_codes(code)
         latest_nav = None
         if nav_df is not None and not nav_df.empty:
-            latest_nav = float(nav_df.iloc[-1]["nav"])
+            try:
+                latest_nav = float(nav_df.iloc[-1]["nav"])
+            except Exception:
+                latest_nav = None
         if (rets.get("r30") is None or rets.get("r90") is None) and historical.get(code):
             snap = historical[code]
             rets = {
@@ -61,6 +67,31 @@ def main() -> int:
                 fee = snap.get("fee_rate")
             if aum is None:
                 aum = snap.get("aum")
+        used_cache = False
+        snap = historical.get(code) if historical else None
+        if snap:
+            if latest_nav is None or latest_nav == 0:
+                if snap.get("latest_nav") not in (None, 0):
+                    latest_nav = snap.get("latest_nav")
+                    used_cache = True
+            if rets.get("r1") is None and snap.get("change_1d") is not None:
+                rets["r1"] = snap.get("change_1d")
+                used_cache = True
+            if rets.get("r7") is None and snap.get("change_7d") is not None:
+                rets["r7"] = snap.get("change_7d")
+                used_cache = True
+            if rets.get("r30") is None and snap.get("change_30d") is not None:
+                rets["r30"] = snap.get("change_30d")
+                used_cache = True
+            if mdd is None and snap.get("max_drawdown") is not None:
+                mdd = snap.get("max_drawdown")
+                used_cache = True
+            if fee is None and snap.get("fee_rate") is not None:
+                fee = snap.get("fee_rate")
+                used_cache = True
+            if aum is None and snap.get("aum") is not None:
+                aum = snap.get("aum")
+                used_cache = True
         data = {
             "code": code,
             "name": f.name or code,
@@ -70,14 +101,16 @@ def main() -> int:
             "change_7d": rets.get("r7"),
             "change_30d": rets.get("r30"),
             "change_90d": rets.get("r90"),
-            "top_holdings": to_json(holdings),
+            "top_holdings": to_json(holdings) if holdings else (snap.get("top_holdings") if snap and snap.get("top_holdings") else "[]"),
             "max_drawdown": mdd,
             "fee_rate": f.fee_rate if f.fee_rate is not None else fee,
             "aum": f.aum if f.aum is not None else aum,
             "updated_at": datetime.utcnow().isoformat(),
+            "used_cache": used_cache,
         }
         db.upsert_fund(data)
         pool.append(data)
+        cache_used[code] = used_cache
         # watch: 日波动阈值告警（配置为小数，0.015=1.5%）
         try:
             threshold = f.watch.daily_change_alert if (f.watch and f.watch.daily_change_alert is not None) else None
@@ -183,8 +216,24 @@ def main() -> int:
         "note": fallback_note,
     }
     llm = summarize_with_llm(payload) or fallback_summary(payload)
-    # 决策路径拆解
-    pct = yf_pct_change("NQ=F") or yf_pct_change("^NDX") or 0.0
+    cn_now = datetime.utcnow() + timedelta(hours=8)
+    mode = (os.getenv("NAV_UPDATE_MODE") or "").strip().lower()
+    if not mode:
+        if cn_now.hour == 8:
+            mode = "morning"
+        elif cn_now.hour == 15:
+            mode = "close"
+        else:
+            mode = "sync"
+
+    pct_raw: float | None
+    if mode == "close":
+        pct_raw = yf_live_pct_change("NQ=F") or yf_pct_change("NQ=F")
+    elif mode == "morning":
+        pct_raw = yf_pct_change("^NDX") or yf_pct_change("NQ=F")
+    else:
+        pct_raw = yf_pct_change("NQ=F") or yf_pct_change("^NDX")
+    pct = pct_raw if pct_raw is not None else 0.0
     th = cfg.dca.thresholds
     # 基础乘数
     if pct <= th.crash_hard:
@@ -247,54 +296,75 @@ def main() -> int:
             reasons[z["code"]] = "；".join(rs[:2]) if rs else "综合因子均衡"
     # 决策看板消息
     lines = []
-    lines.append("📊 【Wisteria Fund Bot - 决策看板】")
+    if mode == "morning":
+        lines.append("📊 【Wisteria Fund Bot - 今日执行指令（08:30）】")
+    elif mode == "close":
+        lines.append("📊 【Wisteria Fund Bot - 收盘提醒（15:15）】")
+    else:
+        lines.append("📊 【Wisteria Fund Bot - 数据同步报告（23:59）】")
+    lines.append("数据来源：实时=AKShare；缓存=本地DB最近有效交易日 (Cache)")
     lines.append("1. 市场环境监控")
-    pct_str = f"{pct:.2f}%" if pct is not None else "—"
+    pct_str = f"{pct_raw:.2f}%" if pct_raw is not None else "—"
     bias_str = f"{bias:.2f}%" if bias is not None else "—"
     dgs10_str = f"{dgs10:.2f}%" if dgs10 is not None else "—"
     lines.append(f"• 纳指期货 NQ=F：{pct_str}")
     lines.append(f"• 年线乖离率 Bias：{bias_str}")
     lines.append(f"• 10年期美债 DGS10：{dgs10_str}")
-    lines.append("2. 决策计算路径")
-    lines.append(f"• 基础乘数：{base_mult:.2f}x（源于日变动）")
-    lines.append(f"• 位置修正：×{pos_mult:.2f}（源于 Bias）")
-    lines.append(f"• 宏观修正：×{macro_mult:.2f}（源于 DGS10）")
-    lines.append(f"3. 最终指令：{dca_mult:.2f}x → 建议 {dca_amount:.2f} 元")
-    if macro_note:
-        lines.append(f"🛑 宏观刹车：{macro_note}")
-    # 加仓确认：RSI<30 且连跌3天
+    if mode != "sync":
+        lines.append("2. 决策计算路径")
+        lines.append(f"• 基础乘数：{base_mult:.2f}x（源于 NQ=F/^NDX）")
+        lines.append(f"• 位置修正：×{pos_mult:.2f}（源于 Bias）")
+        lines.append(f"• 宏观修正：×{macro_mult:.2f}（源于 DGS10）")
+        lines.append(f"3. 最终指令：{dca_mult:.2f}x → 建议 {dca_amount:.2f} 元")
+        if macro_note:
+            lines.append(f"🛑 宏观刹车：{macro_note}")
+    else:
+        prev_logs = db.latest_dca_logs(2)
+        prev = None
+        if prev_logs:
+            for it in prev_logs:
+                if it.get("date") != today:
+                    prev = it
+                    break
+        if prev and bias is not None and prev.get("bias") is not None:
+            lines.append(f"• Bias 变化：{bias - float(prev.get('bias')):+.2f}%")
+        if prev and dgs10 is not None and prev.get("dgs10") is not None:
+            lines.append(f"• DGS10 变化：{dgs10 - float(prev.get('dgs10')):+.2f}%")
     suggest_lump = False
-    if dca_mult >= 2.0 and top_for_msg:
-        try:
-            top_code = top_for_msg[0].get("code")
-            nav_df = fetch_fund_nav_series(top_code, 60)
-            if nav_df is not None and not nav_df.empty and len(nav_df) >= 20:
-                closes = nav_df["nav"].astype(float).tolist()
-                rsi14 = rsi(closes, period=14)
-                downs = 0
-                for i in range(1, 4):
-                    if closes[-i] < closes[-i - 1]:
-                        downs += 1
-                if (rsi14 is not None and rsi14 < 30) and downs >= 3:
-                    suggest_lump = True
-        except Exception:
-            suggest_lump = False
-    if suggest_lump:
-        cand = ", ".join([x.get('name', x['code']) for x in top_for_msg[:2]])
-        lines.append(f"🧭 一次性加仓候选（冷静期满足）：{cand}（RSI<30 & 三连跌）")
-    if top_for_msg:
-        lines.append("4. 标的选拔")
-        for x in top_for_msg:
-            r = reasons.get(x["code"]) if reasons else None
-            reason = f"— 理由：{r}" if r else ""
-            lines.append(f"• {x.get('name', x['code'])}（综合分 {x['score_total']}）{reason}")
-    if bottom_for_msg:
-        lines.append("⚠️ 风险警示：")
-        for x in bottom_for_msg:
-            lines.append(f"• {x.get('name', x['code'])} (综合分 {x['score_total']})")
-    if alerts:
-        lines.append("🚨 阈值告警：")
-        lines.extend(alerts)
+    if mode != "sync":
+        if dca_mult >= 2.0 and top_for_msg:
+            try:
+                top_code = top_for_msg[0].get("code")
+                nav_df = fetch_fund_nav_series(top_code, 60)
+                if nav_df is not None and not nav_df.empty and len(nav_df) >= 20:
+                    closes = nav_df["nav"].astype(float).tolist()
+                    rsi14 = rsi(closes, period=14)
+                    downs = 0
+                    for i in range(1, 4):
+                        if closes[-i] < closes[-i - 1]:
+                            downs += 1
+                    if (rsi14 is not None and rsi14 < 30) and downs >= 3:
+                        suggest_lump = True
+            except Exception:
+                suggest_lump = False
+        if suggest_lump:
+            cand = ", ".join([x.get("name", x["code"]) for x in top_for_msg[:2]])
+            lines.append(f"🧭 一次性加仓候选（冷静期满足）：{cand}（RSI<30 & 三连跌）")
+        if top_for_msg:
+            lines.append("4. 标的选拔")
+            for x in top_for_msg:
+                r = reasons.get(x["code"]) if reasons else None
+                reason = f"— 理由：{r}" if r else ""
+                score = format_score_total(x.get("score_total"), bool(x.get("used_cache")))
+                lines.append(f"• {x.get('name', x['code'])}（综合分 {score}）{reason}")
+        if bottom_for_msg:
+            lines.append("⚠️ 风险警示：")
+            for x in bottom_for_msg:
+                score = format_score_total(x.get("score_total"), bool(x.get("used_cache")))
+                lines.append(f"• {x.get('name', x['code'])} (综合分 {score})")
+        if alerts:
+            lines.append("🚨 阈值告警：")
+            lines.extend(alerts)
     if fallback_note:
         lines.append(f"ℹ️ {fallback_note}")
     text = "\n".join(lines)

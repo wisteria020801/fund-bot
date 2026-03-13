@@ -4,6 +4,14 @@ import requests
 from typing import Optional
 
 
+def format_score_total(score: Optional[float], used_cache: bool) -> str:
+    if score is None:
+        s = "—"
+    else:
+        s = str(score)
+    return f"{s}(Cache)" if used_cache else s
+
+
 def send_telegram_message(text: str) -> Optional[str]:
     token = os.getenv("TELEGRAM_TOKEN", "")
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "")

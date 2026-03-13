@@ -247,3 +247,15 @@ def export_dca_csv(path: str) -> None:
         w.writerow(["date", "bias", "dgs10", "rsi14", "dca_mult", "dca_amount", "pct", "avg_score", "suggest_lump", "note", "ts"])
         for r in rows:
             w.writerow([r["date"], r["bias"], r["dgs10"], r["rsi14"], r["dca_mult"], r["dca_amount"], r["pct"], r["avg_score"], r["suggest_lump"], r["note"], r["ts"]])
+
+
+def latest_dca_logs(limit: int = 2) -> list[dict]:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        "select date,bias,dgs10,rsi14,dca_mult,dca_amount,pct,avg_score,suggest_lump,note,ts from dca_logs order by date desc limit ?",
+        (limit,),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]

@@ -2,6 +2,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 import math
+import time
 
 import pandas as pd
 import requests
@@ -24,7 +25,18 @@ def fetch_fund_nav_series(code: str, days: int = 365) -> Optional[pd.DataFrame]:
     try:
         end = datetime.today().date()
         start = end - timedelta(days=days + 5)
-        df = ak.fund_em_open_fund_info(fund=code, indicator="单位净值走势")
+
+        df = None
+        for i in range(3):
+            try:
+                df = ak.fund_em_open_fund_info(fund=code, indicator="单位净值走势")
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    break
+            except Exception:
+                df = None
+            time.sleep(1.2 * (i + 1))
+        if df is None or df.empty:
+            return None
         df = df.rename(columns={"净值日期": "date", "单位净值": "nav"})
         df["date"] = pd.to_datetime(df["date"]).dt.date
         df = df[df["date"] >= start]
@@ -89,37 +101,41 @@ def _yf_history(symbol: str, period: str = "1y") -> Optional[pd.DataFrame]:
         import yfinance as yf
     except Exception:
         return None
-    try:
-        df = yf.Ticker(symbol).history(period=period)
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            df = df.reset_index()
-            if "Date" in df.columns:
-                df.rename(columns={"Date": "date"}, inplace=True)
-            if "Close" in df.columns:
-                df.rename(columns={"Close": "close"}, inplace=True)
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-            return df[["date", "close"]]
-    except Exception:
-        return None
+    for i in range(3):
+        try:
+            df = yf.Ticker(symbol).history(period=period)
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                df = df.reset_index()
+                if "Date" in df.columns:
+                    df.rename(columns={"Date": "date"}, inplace=True)
+                if "Close" in df.columns:
+                    df.rename(columns={"Close": "close"}, inplace=True)
+                df["date"] = pd.to_datetime(df["date"]).dt.date
+                return df[["date", "close"]]
+        except Exception:
+            pass
+        time.sleep(1.0 * (i + 1))
     return None
 
 
 def _stooq_history_ndx(period_days: int = 400) -> Optional[pd.DataFrame]:
     # Stooq NDX daily CSV: https://stooq.com/q/d/l/?s=^ndx&i=d
-    try:
-        url = "https://stooq.com/q/d/l/?s=^ndx&i=d"
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        from io import StringIO
+    url = "https://stooq.com/q/d/l/?s=^ndx&i=d"
+    for i in range(3):
+        try:
+            r = requests.get(url, timeout=20)
+            r.raise_for_status()
+            from io import StringIO
 
-        df = pd.read_csv(StringIO(r.text))
-        if not df.empty:
-            df.rename(columns={"Date": "date", "Close": "close"}, inplace=True)
-            df["date"] = pd.to_datetime(df["date"]).dt.date
-            df = df.sort_values("date").tail(period_days)
-            return df[["date", "close"]]
-    except Exception:
-        return None
+            df = pd.read_csv(StringIO(r.text))
+            if not df.empty:
+                df.rename(columns={"Date": "date", "Close": "close"}, inplace=True)
+                df["date"] = pd.to_datetime(df["date"]).dt.date
+                df = df.sort_values("date").tail(period_days)
+                return df[["date", "close"]]
+        except Exception:
+            pass
+        time.sleep(1.2 * (i + 1))
     return None
 
 
@@ -152,23 +168,24 @@ def yf_pct_change(symbol: str) -> Optional[float]:
 
 def fred_dgs10_latest() -> Optional[float]:
     # 10Y Treasury Yield, daily percent
-    try:
-        url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"
-        r = requests.get(url, timeout=20)
-        r.raise_for_status()
-        from io import StringIO
+    url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10"
+    for i in range(3):
+        try:
+            r = requests.get(url, timeout=20)
+            r.raise_for_status()
+            from io import StringIO
 
-        df = pd.read_csv(StringIO(r.text))
-        if "DGS10" in df.columns and not df.empty:
-            # get last non-NaN
-            for v in reversed(df["DGS10"].tolist()):
-                try:
-                    val = float(v)
-                    return val
-                except Exception:
-                    continue
-    except Exception:
-        return None
+            df = pd.read_csv(StringIO(r.text))
+            if "DGS10" in df.columns and not df.empty:
+                for v in reversed(df["DGS10"].tolist()):
+                    try:
+                        val = float(v)
+                        return val
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        time.sleep(1.2 * (i + 1))
     return None
 
 
@@ -197,24 +214,29 @@ def fetch_fund_meta(code: str) -> Tuple[Optional[float], Optional[float]]:
         return None, None
     fee = None
     aum = None
-    try:
-        info = ak.fund_em_open_fund_info(fund=code, indicator="基金档案")
-        if isinstance(info, pd.DataFrame) and not info.empty:
-            for _, r in info.iterrows():
-                k = str(r.get("项目", ""))
-                v = str(r.get("内容", ""))
-                if "管理费率" in k:
-                    try:
-                        fee = float(v.strip("%")) if v.endswith("%") else float(v)
-                    except Exception:
-                        pass
-                if "资产规模" in k or "基金规模" in k:
-                    try:
-                        aum = float(v.replace(",", "").replace("亿", "")) * 1e8 if "亿" in v else float(v)
-                    except Exception:
-                        pass
-    except Exception:
-        pass
+    info = None
+    for i in range(3):
+        try:
+            info = ak.fund_em_open_fund_info(fund=code, indicator="基金档案")
+            if isinstance(info, pd.DataFrame) and not info.empty:
+                break
+        except Exception:
+            info = None
+        time.sleep(1.2 * (i + 1))
+    if isinstance(info, pd.DataFrame) and not info.empty:
+        for _, r in info.iterrows():
+            k = str(r.get("项目", ""))
+            v = str(r.get("内容", ""))
+            if "管理费率" in k:
+                try:
+                    fee = float(v.strip("%")) if v.endswith("%") else float(v)
+                except Exception:
+                    pass
+            if "资产规模" in k or "基金规模" in k:
+                try:
+                    aum = float(v.replace(",", "").replace("亿", "")) * 1e8 if "亿" in v else float(v)
+                except Exception:
+                    pass
     return fee, aum
 
 
@@ -223,15 +245,43 @@ def fetch_top_holdings_codes(code: str) -> List[str]:
         import akshare as ak
     except Exception:
         return []
-    try:
-        df = ak.fund_em_portfolio_holdings(fund=code)
-        if isinstance(df, pd.DataFrame) and not df.empty:
-            col = "持仓股票代码" if "持仓股票代码" in df.columns else "股票代码" if "股票代码" in df.columns else None
-            if col:
-                return [str(x) for x in df[col].head(10).tolist()]
-    except Exception:
-        return []
+    df = None
+    for i in range(3):
+        try:
+            df = ak.fund_em_portfolio_holdings(fund=code)
+            if isinstance(df, pd.DataFrame) and not df.empty:
+                break
+        except Exception:
+            df = None
+        time.sleep(1.2 * (i + 1))
+    if isinstance(df, pd.DataFrame) and not df.empty:
+        col = "持仓股票代码" if "持仓股票代码" in df.columns else "股票代码" if "股票代码" in df.columns else None
+        if col:
+            return [str(x) for x in df[col].head(10).tolist()]
     return []
+
+
+def yf_live_pct_change(symbol: str) -> Optional[float]:
+    try:
+        import yfinance as yf
+    except Exception:
+        return None
+    for i in range(3):
+        try:
+            t = yf.Ticker(symbol)
+            info = {}
+            try:
+                info = t.fast_info or {}
+            except Exception:
+                info = {}
+            last = _safe_float(info.get("lastPrice") if isinstance(info, dict) else None)
+            prev = _safe_float(info.get("previousClose") if isinstance(info, dict) else None)
+            if last is not None and prev:
+                return (last - prev) / prev * 100.0
+        except Exception:
+            pass
+        time.sleep(0.8 * (i + 1))
+    return None
 
 
 def fetch_premarket_change(symbols: List[str]) -> Dict[str, Optional[float]]:
