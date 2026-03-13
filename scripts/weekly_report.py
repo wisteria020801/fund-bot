@@ -34,7 +34,6 @@ def build_heatmap(df: pd.DataFrame, out_path: str) -> None:
     df["weekday"] = pd.to_datetime(df["date"]).dt.weekday
     df["week"] = pd.to_datetime(df["date"]) - pd.to_timedelta(pd.to_datetime(df["date"]).dt.weekday, unit="D")
     pivot = df.pivot_table(index="week", columns="weekday", values="dca_mult", aggfunc="mean")
-    # Ensure all 7 weekdays present to match 7 labels
     pivot = pivot.reindex(columns=list(range(7)))
     weeks = sorted({(start + timedelta(days=7*i)) for i in range(8)})
     weeks = [w for w in weeks if w <= end]
@@ -46,7 +45,6 @@ def build_heatmap(df: pd.DataFrame, out_path: str) -> None:
     ax.set_xlabel("")
     ax.set_ylabel("")
     ax.set_yticklabels([d.strftime("%m-%d") for d in pivot.index.date], rotation=0)
-    # Align xtick labels with 7 columns
     ax.set_xticks(range(7))
     ax.set_xticklabels(["一", "二", "三", "四", "五", "六", "日"], rotation=0)
     plt.title(f"DCA Heatmap {start.strftime('%Y-%m-%d')} ~ {end.strftime('%Y-%m-%d')}")

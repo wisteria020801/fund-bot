@@ -6,9 +6,16 @@ from typing import Optional
 
 def format_score_total(score: Optional[float], used_cache: bool) -> str:
     if score is None:
-        s = "—"
+        s = "数据同步中"
     else:
-        s = str(score)
+        try:
+            v = float(score)
+            if v != v:
+                s = "数据同步中"
+            else:
+                s = f"{v:.2f}"
+        except Exception:
+            s = "数据同步中"
     return f"{s}(Cache)" if used_cache else s
 
 

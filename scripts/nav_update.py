@@ -33,6 +33,7 @@ def main() -> int:
     alerts: List[str] = []
     historical = db.all_funds_snapshot()
     cache_used: Dict[str, bool] = {}
+    role_map = {f.code.strip(): f.role for f in cfg.funds if f.code and f.code.strip()}
     for f in cfg.funds:
         code = f.code.strip()
         if not code:
@@ -121,8 +122,8 @@ def main() -> int:
             if abs(chg1) / 100.0 >= float(threshold):
                 role_tag = f"[{f.role}]" if f.role else ""
                 alerts.append(f"• {f.name or code}{role_tag} 日变动 {chg1:.2f}% ≥ 阈值 {threshold*100:.2f}%")
-    ranked = score_pool(pool) if pool else []
-    for x in ranked:
+    ranked_today = score_pool(pool) if pool else []
+    for x in ranked_today:
         db.upsert_score(
             {
                 "code": x["code"],
@@ -135,93 +136,76 @@ def main() -> int:
                 "penalty_fee": x["penalty_fee"],
             }
         )
-    top = ranked[:3]
-    bottom = ranked[-3:] if ranked else []
-    fallback_note = None
+    ranked = ranked_today
     if not ranked or all(abs(z.get("score_total", 0.0)) < 1e-9 for z in ranked):
         last_date = db.latest_scores_date()
         if last_date and last_date != today:
             prev = db.scores_by_date(last_date)
             if prev:
-                ranked = prev
-                top = ranked[:3]
-                bottom = ranked[-3:]
-                fallback_note = f"数据不足，沿用上一交易日评分（{last_date}）。"
-        if (not ranked) and not fallback_note:
-            fallback_note = "数据不足，今日不发布榜单。"
-        if (not ranked) and historical:
-            targets = []
-            d = datetime.utcnow().date()
-            for i in range(1, 8):
-                t = d - timedelta(days=i)
-                if t.weekday() < 5:
-                    targets.append(t)
-                if len(targets) >= 3:
-                    break
-            for t in targets:
-                pool2: List[Dict] = []
-                for f in cfg.funds:
-                    code = f.code.strip()
-                    df = fetch_fund_nav_series(code, 365)
-                    if df is None or df.empty:
-                        continue
-                    rets2 = calc_returns_asof(df, t)
-                    mdd2 = max_drawdown(df[df["date"] <= t])
-                    fee2, aum2 = f.fee_rate, f.aum
-                    if fee2 is None or aum2 is None:
-                        fee3, aum3 = fetch_fund_meta(code)
-                        fee2 = fee2 if fee2 is not None else fee3
-                        aum2 = aum2 if aum2 is not None else aum3
-                    data2 = {
-                        "code": code,
-                        "name": f.name or code,
-                        "latest_nav": None,
-                        "change_1d": rets2.get("r1"),
-                        "change_7d": rets2.get("r7"),
-                        "change_30d": rets2.get("r30"),
-                        "change_90d": rets2.get("r90"),
-                        "top_holdings": "[]",
-                        "max_drawdown": mdd2,
-                        "fee_rate": fee2,
-                        "aum": aum2,
-                    }
-                    pool2.append(data2)
-                ranked2 = score_pool(pool2) if pool2 else []
-                for x in ranked2:
-                    db.upsert_score(
+                ranked = []
+                for r in prev:
+                    code = str(r.get("code") or "").strip()
+                    snap = historical.get(code) if historical and code else None
+                    ranked.append(
                         {
-                            "code": x["code"],
-                            "date": t.isoformat(),
-                            "total": x.get("score_total"),
-                            "rank30": x.get("score_rank30"),
-                            "rank90": x.get("score_rank90"),
-                            "penalty_drawdown": x.get("penalty_drawdown"),
-                            "score_aum": x.get("score_aum"),
-                            "penalty_fee": x.get("penalty_fee"),
+                            "code": code,
+                            "name": r.get("name") or (snap.get("name") if snap else None) or code,
+                            "role": role_map.get(code),
+                            "score_total": float(r.get("total") or 0.0),
+                            "score_rank30": float(r.get("rank30") or 0.0),
+                            "score_rank90": float(r.get("rank90") or 0.0),
+                            "penalty_drawdown": float(r.get("penalty_drawdown") or 0.0),
+                            "score_aum": float(r.get("score_aum") or 0.0),
+                            "penalty_fee": float(r.get("penalty_fee") or 0.0),
+                            "change_30d": snap.get("change_30d") if snap else None,
+                            "change_90d": None,
+                            "max_drawdown": snap.get("max_drawdown") if snap else None,
+                            "fee_rate": snap.get("fee_rate") if snap else None,
+                            "aum": snap.get("aum") if snap else None,
+                            "used_cache": True,
                         }
                     )
-    # 过滤掉全为 0 分的标的以避免“0.0 噪音”
-    visible_ranked = [z for z in ranked if abs(z.get("score_total", 0.0)) > 1e-9]
-    top_visible = visible_ranked[:3]
-    bottom_visible = visible_ranked[-3:] if visible_ranked else []
-    # 后续展示与统计尽量使用可见集合；若为空则保留原集合用于兜底逻辑
-    top_for_msg = top_visible if top_visible else top
-    bottom_for_msg = bottom_visible if bottom_visible else bottom
+                ranked.sort(key=lambda z: z.get("score_total", 0.0), reverse=True)
+    if not ranked:
+        ranked = []
+        for f in cfg.funds:
+            code = f.code.strip()
+            snap = historical.get(code) if historical and code else None
+            ranked.append(
+                {
+                    "code": code,
+                    "name": f.name or (snap.get("name") if snap else None) or code,
+                    "role": f.role,
+                    "score_total": 0.0,
+                    "score_rank30": 0.0,
+                    "score_rank90": 0.0,
+                    "penalty_drawdown": 0.0,
+                    "score_aum": 0.0,
+                    "penalty_fee": 0.0,
+                    "change_30d": snap.get("change_30d") if snap else None,
+                    "change_90d": None,
+                    "max_drawdown": snap.get("max_drawdown") if snap else None,
+                    "fee_rate": snap.get("fee_rate") if snap else None,
+                    "aum": snap.get("aum") if snap else None,
+                    "used_cache": True,
+                }
+            )
+    top_for_msg = ranked[:3]
+    bottom_for_msg = ranked[-3:] if ranked else []
     payload = {
         "scores": ranked,
         "top": top_for_msg,
         "bottom": bottom_for_msg,
         "type": "nav_update",
         "ts": datetime.utcnow().isoformat(),
-        "note": fallback_note,
     }
     llm = summarize_with_llm(payload) or fallback_summary(payload)
     cn_now = datetime.utcnow() + timedelta(hours=8)
     mode = (os.getenv("NAV_UPDATE_MODE") or "").strip().lower()
     if not mode:
-        if cn_now.hour == 8:
+        if cn_now.hour == 9:
             mode = "morning"
-        elif cn_now.hour == 15:
+        elif cn_now.hour == 14:
             mode = "close"
         else:
             mode = "sync"
@@ -275,7 +259,10 @@ def main() -> int:
         macro_note = f"10Y={dgs10:.2f}%>阈值{cfg.dca.macro_brake_threshold:.2f}%，乘数×{cfg.dca.macro_brake_factor}"
     else:
         macro_mult = 1.0
-    dca_amount = round(cfg.dca.base_amount * dca_mult, 2)
+    base_amount = float(cfg.dca.base_amount or 10.0)
+    dca_amount = round(base_amount * dca_mult, 2)
+    if dca_amount <= 0:
+        dca_amount = base_amount
     # 选拔理由（简单启发式）
     reasons = {}
     if top_for_msg:
@@ -297,77 +284,71 @@ def main() -> int:
     # 决策看板消息
     lines = []
     if mode == "morning":
-        lines.append("📊 【Wisteria Fund Bot - 今日执行指令（08:30）】")
+        lines.append("📊 【Wisteria Fund Bot - 今日执行指令（09:30）】")
     elif mode == "close":
-        lines.append("📊 【Wisteria Fund Bot - 收盘提醒（15:15）】")
+        lines.append("📊 【Wisteria Fund Bot - 收盘提醒（14:30）】")
     else:
-        lines.append("📊 【Wisteria Fund Bot - 数据同步报告（23:59）】")
+        lines.append("📊 【Wisteria Fund Bot - 数据同步报告】")
     lines.append(f"🤖 AI 核心判断：{llm}")
     lines.append("数据来源：实时=AKShare；缓存=本地DB最近有效交易日 (Cache)")
     lines.append("1. 市场环境监控")
-    pct_str = f"{pct_raw:.2f}%" if pct_raw is not None else "—"
-    bias_str = f"{bias:.2f}%" if bias is not None else "—"
-    dgs10_str = f"{dgs10:.2f}%" if dgs10 is not None else "—"
+    pct_str = f"{pct_raw:.2f}%" if pct_raw is not None else "数据同步中"
+    bias_str = f"{bias:.2f}%" if bias is not None else "数据同步中"
+    dgs10_str = f"{dgs10:.2f}%" if dgs10 is not None else "数据同步中"
     lines.append(f"• 纳指期货 NQ=F：{pct_str}")
     lines.append(f"• 年线乖离率 Bias：{bias_str}")
     lines.append(f"• 10年期美债 DGS10：{dgs10_str}")
-    if mode != "sync":
-        lines.append("2. 决策计算路径")
-        lines.append(f"• 基础乘数：{base_mult:.2f}x（源于 NQ=F/^NDX）")
-        lines.append(f"• 位置修正：×{pos_mult:.2f}（源于 Bias）")
-        lines.append(f"• 宏观修正：×{macro_mult:.2f}（源于 DGS10）")
-        lines.append(f"3. 最终指令：{dca_mult:.2f}x → 建议 {dca_amount:.2f} 元")
-        if macro_note:
-            lines.append(f"🛑 宏观刹车：{macro_note}")
-    else:
-        prev_logs = db.latest_dca_logs(2)
-        prev = None
-        if prev_logs:
-            for it in prev_logs:
-                if it.get("date") != today:
-                    prev = it
-                    break
-        if prev and bias is not None and prev.get("bias") is not None:
-            lines.append(f"• Bias 变化：{bias - float(prev.get('bias')):+.2f}%")
-        if prev and dgs10 is not None and prev.get("dgs10") is not None:
-            lines.append(f"• DGS10 变化：{dgs10 - float(prev.get('dgs10')):+.2f}%")
+    if mode == "sync":
+        lines.append("提示：当前为数据同步阶段，以下指令按可得数据计算，仅供参考")
+    lines.append("2. 决策计算路径")
+    lines.append(f"• 基础乘数：{base_mult:.2f}x（源于 NQ=F/^NDX）")
+    lines.append(f"• 位置修正：×{pos_mult:.2f}（源于 Bias）")
+    lines.append(f"• 宏观修正：×{macro_mult:.2f}（源于 DGS10）")
+    lines.append(f"3. 最终指令：{dca_mult:.2f}x → 建议 {dca_amount:.2f} 元")
+    if macro_note:
+        lines.append(f"🛑 宏观刹车：{macro_note}")
     suggest_lump = False
-    if mode != "sync":
-        if dca_mult >= 2.0 and top_for_msg:
-            try:
-                top_code = top_for_msg[0].get("code")
-                nav_df = fetch_fund_nav_series(top_code, 60)
-                if nav_df is not None and not nav_df.empty and len(nav_df) >= 20:
-                    closes = nav_df["nav"].astype(float).tolist()
-                    rsi14 = rsi(closes, period=14)
-                    downs = 0
-                    for i in range(1, 4):
-                        if closes[-i] < closes[-i - 1]:
-                            downs += 1
-                    if (rsi14 is not None and rsi14 < 30) and downs >= 3:
-                        suggest_lump = True
-            except Exception:
-                suggest_lump = False
-        if suggest_lump:
-            cand = ", ".join([x.get("name", x["code"]) for x in top_for_msg[:2]])
-            lines.append(f"🧭 一次性加仓候选（冷静期满足）：{cand}（RSI<30 & 三连跌）")
-        if top_for_msg:
-            lines.append("4. 标的选拔")
-            for x in top_for_msg:
-                r = reasons.get(x["code"]) if reasons else None
-                reason = f"— 理由：{r}" if r else ""
-                score = format_score_total(x.get("score_total"), bool(x.get("used_cache")))
-                lines.append(f"• {x.get('name', x['code'])}（综合分 {score}）{reason}")
-        if bottom_for_msg:
-            lines.append("⚠️ 风险警示：")
-            for x in bottom_for_msg:
-                score = format_score_total(x.get("score_total"), bool(x.get("used_cache")))
-                lines.append(f"• {x.get('name', x['code'])} (综合分 {score})")
-        if alerts:
-            lines.append("🚨 阈值告警：")
-            lines.extend(alerts)
-    if fallback_note:
-        lines.append(f"ℹ️ {fallback_note}")
+    if dca_mult >= 2.0 and top_for_msg:
+        try:
+            top_code = top_for_msg[0].get("code")
+            nav_df = fetch_fund_nav_series(top_code, 60)
+            if nav_df is not None and not nav_df.empty and len(nav_df) >= 20:
+                closes = nav_df["nav"].astype(float).tolist()
+                rsi14 = rsi(closes, period=14)
+                downs = 0
+                for i in range(1, 4):
+                    if closes[-i] < closes[-i - 1]:
+                        downs += 1
+                if (rsi14 is not None and rsi14 < 30) and downs >= 3:
+                    suggest_lump = True
+        except Exception:
+            suggest_lump = False
+    if suggest_lump:
+        cand = ", ".join([x.get("name", x["code"]) for x in top_for_msg[:2]])
+        lines.append(f"🧭 一次性加仓候选（冷静期满足）：{cand}（RSI<30 & 三连跌）")
+    if top_for_msg:
+        lines.append("4. 标的选拔")
+        for x in top_for_msg:
+            r = reasons.get(x["code"]) if reasons else None
+            reason = f"— 理由：{r}" if r else ""
+            score = format_score_total(x.get("score_total"), bool(x.get("used_cache")))
+            r30 = x.get("score_rank30")
+            r90 = x.get("score_rank90")
+            r30s = f"{float(r30):.2f}" if r30 is not None else "数据同步中"
+            r90s = f"{float(r90):.2f}" if r90 is not None else "数据同步中"
+            lines.append(f"• {x.get('name', x['code'])}（综合分 {score}，Rank30 {r30s}，Rank90 {r90s}）{reason}")
+    if bottom_for_msg:
+        lines.append("⚠️ 风险警示：")
+        for x in bottom_for_msg:
+            score = format_score_total(x.get("score_total"), bool(x.get("used_cache")))
+            r30 = x.get("score_rank30")
+            r90 = x.get("score_rank90")
+            r30s = f"{float(r30):.2f}" if r30 is not None else "数据同步中"
+            r90s = f"{float(r90):.2f}" if r90 is not None else "数据同步中"
+            lines.append(f"• {x.get('name', x['code'])} (综合分 {score}，Rank30 {r30s}，Rank90 {r90s})")
+    if alerts:
+        lines.append("🚨 阈值告警：")
+        lines.extend(alerts)
     text = "\n".join(lines)
     send_telegram_message(text)
     db.log_message("nav_update", text)
@@ -387,9 +368,9 @@ def main() -> int:
                 "dca_mult": dca_mult,
                 "dca_amount": dca_amount,
                 "pct": pct,
-                "avg_score": sum(x.get("score_total", 0.0) for x in top) / max(1, len(top)) if top else None,
+                "avg_score": sum(x.get("score_total", 0.0) for x in top_for_msg) / max(1, len(top_for_msg)) if top_for_msg else None,
                 "suggest_lump": 1 if suggest_lump else 0,
-                "note": fallback_note,
+                "note": None,
                 "ts": datetime.utcnow().isoformat(),
             }
         )
