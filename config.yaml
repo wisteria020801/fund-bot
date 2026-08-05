@@ -37,3 +37,52 @@ funds:
     role: "Cash_Buffer"
     watch:
       daily_change_alert: 0.005
+# A股观察池（用于学习分析，不自动交易）
+cn_stocks:
+  - code: "600519"
+    name: "贵州茅台"
+    sector: "消费"
+  - code: "300750"
+    name: "宁德时代"
+    sector: "新能源"
+  - code: "002594"
+    name: "比亚迪"
+    sector: "新能源"
+  - code: "300308"
+    name: "中际旭创"
+    sector: "AI/光模块"
+# 美股观察池（盘前播报已有 us_tickers，此处用于持仓跟踪）
+us_stocks:
+  - code: "NVDA"
+    name: "英伟达"
+    sector: "AI/半导体"
+  - code: "MSFT"
+    name: "微软"
+    sector: "科技"
+  - code: "GOOGL"
+    name: "谷歌"
+    sector: "科技"
+  - code: "TSLA"
+    name: "特斯拉"
+    sector: "新能源"
+# 模拟盘配置
+paper_account:
+  initial_cash: 10000
+  currency: "CNY"
+# 股票分析评分权重（合计100）
+stock_analysis:
+  weights:
+    technical: 30
+    fundamental: 40
+    valuation: 20
+    sentiment: 10
+  # 估值参考阈值
+  valuation:
+    pe_undervalued: 15    # PE<15 视为低估
+    pe_overvalued: 40     # PE>40 视为高估
+    pb_undervalued: 1.5
+    pb_overvalued: 6.0
+  # 技术面参数
+  technical:
+    rsi_oversold: 30      # RSI<30 超卖
+    rsi_overbought: 70    # RSI>70 超买

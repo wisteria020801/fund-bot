@@ -86,6 +86,56 @@ def init_db() -> None:
         )
         """
     )
+    cur.execute(
+        """
+        create table if not exists accounts(
+            id integer primary key autoincrement,
+            name text not null,
+            mode text not null,
+            currency text default 'CNY',
+            initial_cash real not null,
+            cash real not null,
+            created_at text,
+            updated_at text
+        )
+        """
+    )
+    cur.execute(
+        """
+        create table if not exists trades(
+            id integer primary key autoincrement,
+            account_id integer not null,
+            date text not null,
+            code text not null,
+            market text not null,
+            name text,
+            action text not null,
+            price real not null,
+            quantity real not null,
+            amount real not null,
+            fee real default 0,
+            currency text default 'CNY',
+            reason text,
+            realized_pnl real,
+            created_at text
+        )
+        """
+    )
+    cur.execute(
+        """
+        create table if not exists positions(
+            account_id integer not null,
+            code text not null,
+            market text not null,
+            name text,
+            quantity real not null,
+            avg_cost real not null,
+            currency text default 'CNY',
+            updated_at text,
+            primary key(account_id, code)
+        )
+        """
+    )
     conn.commit()
     conn.close()
 
@@ -259,3 +309,150 @@ def latest_dca_logs(limit: int = 2) -> list[dict]:
     rows = cur.fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ==================== 账户管理 ====================
+
+def create_account(name: str, mode: str, initial_cash: float, currency: str = "CNY") -> int:
+    """创建账户，mode: 'paper'(模拟) / 'real'(实盘)。返回 account_id。"""
+    conn = connect()
+    cur = conn.cursor()
+    now = datetime.utcnow().isoformat()
+    cur.execute(
+        "insert into accounts(name, mode, currency, initial_cash, cash, created_at, updated_at) values(?,?,?,?,?,?,?)",
+        (name, mode, currency, initial_cash, initial_cash, now, now),
+    )
+    conn.commit()
+    aid = cur.lastrowid
+    conn.close()
+    return aid
+
+
+def get_account(account_id: int) -> dict | None:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("select * from accounts where id=?", (account_id,))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def list_accounts() -> list[dict]:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("select * from accounts order by id")
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_account_cash(account_id: int, cash: float) -> None:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        "update accounts set cash=?, updated_at=? where id=?",
+        (cash, datetime.utcnow().isoformat(), account_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ==================== 交易记录 ====================
+
+def insert_trade(row: Dict[str, Any]) -> int:
+    """插入一条交易记录，返回 trade id。"""
+    conn = connect()
+    cur = conn.cursor()
+    cols = [
+        "account_id", "date", "code", "market", "name", "action",
+        "price", "quantity", "amount", "fee", "currency", "reason",
+        "realized_pnl", "created_at",
+    ]
+    vals = [row.get(c) for c in cols]
+    placeholders = ",".join(["?"] * len(cols))
+    cur.execute(f"insert into trades({','.join(cols)}) values({placeholders})", vals)
+    conn.commit()
+    tid = cur.lastrowid
+    conn.close()
+    return tid
+
+
+def get_trades(account_id: int, limit: int = 100) -> list[dict]:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        "select * from trades where account_id=? order by date desc, id desc limit ?",
+        (account_id, limit),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_trades_by_code(account_id: int, code: str) -> list[dict]:
+    """获取某只标的的全部交易记录（按时间正序），用于重建持仓。"""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        "select * from trades where account_id=? and code=? order by date asc, id asc",
+        (account_id, code),
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ==================== 持仓管理 ====================
+
+def upsert_position(row: Dict[str, Any]) -> None:
+    conn = connect()
+    cur = conn.cursor()
+    cols = ["account_id", "code", "market", "name", "quantity", "avg_cost", "currency", "updated_at"]
+    vals = [row.get(c) for c in cols]
+    update_cols = ",".join([f"{c}=excluded.{c}" for c in cols[3:]])
+    placeholders = ",".join(["?"] * len(cols))
+    cur.execute(
+        f"insert into positions({','.join(cols)}) values({placeholders}) on conflict(account_id, code) do update set {update_cols}",
+        vals,
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_position(account_id: int, code: str) -> dict | None:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("select * from positions where account_id=? and code=?", (account_id, code))
+    row = cur.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_positions(account_id: int) -> list[dict]:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("select * from positions where account_id=? and quantity > 0 order by code", (account_id,))
+    rows = cur.fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_position(account_id: int, code: str) -> None:
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute("delete from positions where account_id=? and code=?", (account_id, code))
+    conn.commit()
+    conn.close()
+
+
+def get_realized_pnl(account_id: int) -> float:
+    """账户已实现盈亏合计（从卖出交易记录汇总）。"""
+    conn = connect()
+    cur = conn.cursor()
+    cur.execute(
+        "select coalesce(sum(realized_pnl), 0) as total from trades where account_id=? and action='sell'",
+        (account_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    return float(row["total"]) if row else 0.0
